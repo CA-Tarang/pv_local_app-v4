@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PV Sync Local App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans min-h-screen">
+
+    <nav class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center">
+        <h1 class="text-xl font-bold">📦 PV Sync</h1>
+        <div id="user-info" class="hidden">
+            <span id="current-user" class="mr-4 font-semibold"></span>
+            <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-3 py-1 rounded">Logout</button>
+        </div>
+    </nav>
+
+    <div class="container mx-auto p-6 max-w-4xl">
+
+        <div id="login-view" class="bg-white p-8 rounded shadow-md max-w-sm mx-auto mt-10">
+            <h2 class="text-2xl font-bold mb-6 text-center">Login</h2>
+            <p class="text-sm text-gray-500 mb-4 text-center">Admin: admin/123 <br> Auditor: auditor/123</p>
+            <input type="text" id="username" placeholder="Username" class="w-full mb-4 p-2 border rounded">
+            <input type="password" id="password" placeholder="Password" class="w-full mb-6 p-2 border rounded">
+            <button onclick="login()" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Login</button>
+        </div>
+
+        <div id="admin-view" class="hidden mt-6">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+                <h2 class="text-2xl font-bold">Admin Dashboard</h2>
+                <div class="flex gap-4">
+                    <button onclick="resetData()" class="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 shadow flex items-center">
+                        ⚠️ Reset Data
+                    </button>
+                    <button onclick="generateReport()" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 shadow flex items-center">
+                        📄 Generate Excel Report
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded shadow-md mb-8">
+                <h3 class="text-lg font-bold mb-4">Upload Master Data</h3>
+                <div class="flex items-center gap-4">
+                    <input type="file" id="file-upload" accept=".xlsx, .xls, .pdf" class="border p-2 rounded w-full">
+                    <button onclick="uploadFile()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 whitespace-nowrap">Upload File</button>
+                </div>
+                <p id="upload-status" class="mt-2 text-sm text-green-600 font-semibold"></p>
+            </div>
+
+            <div class="bg-white p-6 rounded shadow-md">
+                <h3 class="text-lg font-bold mb-4">Live Reconciliation</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-gray-200">
+                                <th class="p-2 border">SKU</th>
+                                <th class="p-2 border">Description</th>
+                                <th class="p-2 border">Book Qty</th>
+                                <th class="p-2 border">Physical Qty</th>
+                                <th class="p-2 border">Variance</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dashboard-table">
+                            </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="auditor-view" class="hidden mt-6">
+            <h2 class="text-2xl font-bold mb-6">Submit Physical Count</h2>
+            <div class="bg-white p-6 rounded shadow-md max-w-md mx-auto">
+                <label class="block mb-2 font-semibold">Select Item</label>
+                <select id="item-select" class="w-full mb-4 p-2 border rounded"></select>
+
+                <label class="block mb-2 font-semibold">Quantity Found</label>
+                <input type="number" id="count-qty" class="w-full mb-6 p-2 border rounded" placeholder="Enter quantity">
+
+                <button onclick="submitCount()" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Submit Count</button>
+                <p id="count-status" class="mt-4 text-center text-green-600 font-semibold"></p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let currentUser = null;
+
+        function showView(viewId) {
+            document.getElementById('login-view').classList.add('hidden');
+            document.getElementById('admin-view').classList.add('hidden');
+            document.getElementById('auditor-view').classList.add('hidden');
+            document.getElementById('user-info').classList.remove('hidden');
+            document.getElementById(viewId).classList.remove('hidden');
+        }
+
+        async function login() {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: user, password: pass })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                currentUser = data.username;
+                document.getElementById('current-user').innerText = `Logged in as: ${data.username} (${data.role})`;
+                
+                if (data.role === 'admin') {
+                    showView('admin-view');
+                    loadDashboard();
+                } else {
+                    showView('auditor-view');
+                    loadItems();
+                }
+            } else {
+                alert("Invalid Credentials. Use admin/123 or auditor/123");
+            }
+        }
+
+        function logout() {
+            currentUser = null;
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+            document.getElementById('user-info').classList.add('hidden');
+            showView('login-view');
+        }
+
+        // --- Admin Functions ---
+        async function uploadFile() {
+            const fileInput = document.getElementById('file-upload');
+            if (fileInput.files.length === 0) return alert("Please select a file first.");
+
+            const formData = new FormData();
+            formData.append("file", fileInput.files[0]);
+            
+            document.getElementById('upload-status').innerText = "Uploading...";
+
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            
+            if (res.ok) {
+                document.getElementById('upload-status').innerText = data.message;
+                loadDashboard(); 
+            } else {
+                document.getElementById('upload-status').innerText = "Error: " + data.detail;
+            }
+        }
+
+        async function loadDashboard() {
+            const res = await fetch('/api/dashboard');
+            const data = await res.json();
+            const tbody = document.getElementById('dashboard-table');
+            tbody.innerHTML = '';
+
+            data.forEach(row => {
+                const varianceColor = row.variance === 0 ? 'text-green-600' : 'text-red-600 font-bold';
+                tbody.innerHTML += `
+                    <tr class="border-b">
+                        <td class="p-2 border">${row.sku}</td>
+                        <td class="p-2 border">${row.description}</td>
+                        <td class="p-2 border">${row.book_qty}</td>
+                        <td class="p-2 border font-bold">${row.physical_qty}</td>
+                        <td class="p-2 border ${varianceColor}">${row.variance}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        function generateReport() {
+            window.location.href = "/api/export";
+        }
+
+        async function resetData() {
+            const confirmDelete = confirm("Are you sure you want to erase all inventory and counts? This cannot be undone.");
+            if (!confirmDelete) return;
+
+            const res = await fetch('/api/reset', { method: 'POST' });
+            
+            if (res.ok) {
+                const data = await res.json();
+                alert(data.message);
+                document.getElementById('upload-status').innerText = ''; 
+                loadDashboard(); 
+            } else {
+                const errorData = await res.json();
+                alert("Error: " + errorData.detail);
+            }
+        }
+
+        // --- Auditor Functions ---
+        async function loadItems() {
+            const res = await fetch('/api/items');
+            const items = await res.json();
+            const select = document.getElementById('item-select');
+            select.innerHTML = '';
+            items.forEach(item => {
+                select.innerHTML += `<option value="${item.id}">${item.sku} - ${item.description}</option>`;
+            });
+        }
+
+        async function submitCount() {
+            const itemId = document.getElementById('item-select').value;
+            const qty = document.getElementById('count-qty').value;
+            
+            if(!itemId || !qty) return alert("Please select an item and enter quantity.");
+
+            const res = await fetch('/api/count', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_id: itemId, qty: qty, auditor: currentUser })
+            });
+
+            if (res.ok) {
+                document.getElementById('count-status').innerText = "Count Submitted Successfully!";
+                document.getElementById('count-qty').value = '';
+                setTimeout(() => document.getElementById('count-status').innerText = '', 3000);
+            }
+        }
+    </script>
+</body>
+</html>
